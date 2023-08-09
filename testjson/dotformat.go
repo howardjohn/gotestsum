@@ -1,12 +1,13 @@
 package testjson
 
 import (
-	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
@@ -14,52 +15,34 @@ import (
 	"gotest.tools/gotestsum/internal/log"
 )
 
-func dotsFormatV1(out io.Writer) EventFormatter {
-	buf := bufio.NewWriter(out)
-	// nolint:errcheck
-	return eventFormatterFunc(func(event TestEvent, exec *Execution) error {
-		pkg := exec.Package(event.Package)
-		switch {
-		case event.PackageEvent():
-			return nil
-		case event.Action == ActionRun && pkg.Total == 1:
-			buf.WriteString("[" + RelativePackagePath(event.Package) + "]")
-			return buf.Flush()
-		}
-		buf.WriteString(fmtDot(event))
-		return buf.Flush()
-	})
-}
-
-func fmtDot(event TestEvent) string {
-	withColor := colorEvent(event)
-	switch event.Action {
-	case ActionPass:
-		return withColor("·")
-	case ActionFail:
-		return withColor("✖")
-	case ActionSkip:
-		return withColor("↷")
-	}
-	return ""
-}
-
 type dotFormatter struct {
-	pkgs      map[string]*dotLine
-	order     []string
-	writer    *dotwriter.Writer
-	opts      FormatOptions
-	termWidth int
+	pkgs       map[string]*dotLine
+	order      []string
+	writer     *dotwriter.Writer
+	opts       FormatOptions
+	termWidth  int
+	termHeight int
+	stop       chan struct{}
+	flushed    chan struct{}
+	mu         sync.RWMutex
+	last       string
+	summary    []byte
 }
 
 type dotLine struct {
 	runes      int
 	builder    *strings.Builder
 	lastUpdate time.Time
+	out        string
+	empty      bool
+	result     Action
 }
 
 func (l *dotLine) update(dot string) {
 	if dot == "" {
+		return
+	}
+	if l.runes == -1 { // Stop once we hit max length. TODO: add back line wrapping.
 		return
 	}
 	l.builder.WriteString(dot)
@@ -69,27 +52,39 @@ func (l *dotLine) update(dot string) {
 // checkWidth marks the line as full when the width of the line hits the
 // terminal width.
 func (l *dotLine) checkWidth(prefix, terminal int) {
-	if prefix+l.runes >= terminal {
-		l.builder.WriteString("\n" + strings.Repeat(" ", prefix))
-		l.runes = 0
+	if prefix+l.runes >= terminal-1 {
+		l.runes = -1
 	}
 }
 
 func newDotFormatter(out io.Writer, opts FormatOptions) EventFormatter {
-	w, _, err := term.GetSize(int(os.Stdout.Fd()))
+	w, h, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil || w == 0 {
 		log.Warnf("Failed to detect terminal width for dots format, error: %v", err)
 		return dotsFormatV1(out)
 	}
-	return &dotFormatter{
-		pkgs:      make(map[string]*dotLine),
-		writer:    dotwriter.New(out),
-		termWidth: w,
-		opts:      opts,
+	f := &dotFormatter{
+		pkgs:       make(map[string]*dotLine),
+		writer:     dotwriter.New(out),
+		termWidth:  w,
+		termHeight: h - 10,
+		opts:       opts,
+		stop:       make(chan struct{}),
+		flushed:    make(chan struct{}),
 	}
+	go f.runWriter()
+	return f
+}
+
+func (d *dotFormatter) Close() error {
+	close(d.stop)
+	<-d.flushed // Wait until we write the last data
+	return nil
 }
 
 func (d *dotFormatter) Format(event TestEvent, exec *Execution) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.pkgs[event.Package] == nil {
 		d.pkgs[event.Package] = &dotLine{builder: new(strings.Builder)}
 		d.order = append(d.order, event.Package)
@@ -100,39 +95,114 @@ func (d *dotFormatter) Format(event TestEvent, exec *Execution) error {
 	if !event.PackageEvent() {
 		line.update(fmtDot(event))
 	}
-	switch event.Action {
-	case ActionOutput, ActionBench:
-		return nil
+	pkg := exec.Package(event.Package)
+
+	pkgname := RelativePackagePath(event.Package) + " "
+	prefix := fmtDotElapsed(pkg)
+	line.checkWidth(len(prefix+pkgname), d.termWidth)
+	line.checkWidth(len(prefix+pkgname), d.termWidth)
+	line.out = prefix + pkgname + line.builder.String()
+	line.result = pkg.Result()
+
+	line.empty = pkg.IsEmpty()
+	buf := bytes.Buffer{}
+	PrintSummary(&buf, exec, SummarizeNone)
+	d.summary = buf.Bytes()
+
+	return nil
+}
+
+func (d *dotFormatter) runWriter() {
+	t := time.NewTicker(time.Millisecond * 100)
+	for {
+		select {
+		case <-d.stop:
+			if err := d.write(); err != nil {
+				log.Warnf("failed to write: %v", err)
+			}
+			close(d.flushed)
+			return
+		case <-t.C:
+			if err := d.write(); err != nil {
+				log.Warnf("failed to write: %v", err)
+			}
+		}
 	}
+}
 
-	// Add an empty header to work around incorrect line counting
-	fmt.Fprint(d.writer, "\n\n")
+func (d *dotFormatter) write() error {
+	d.mu.RLock() // TODO: lock is not sufficient, we need to read from d.exec in the event handler.
+	defer d.mu.RUnlock()
 
-	sort.Slice(d.order, d.orderByLastUpdated)
+	// TODO summary time should update on each iteration ideally. Although that drops our "skip" optimization
+	summaryLines := strings.Split(string(d.summary), "\n")
+
+	packageLines := []*dotLine{}
 	for _, pkg := range d.order {
-		if d.opts.HideEmptyPackages && exec.Package(pkg).IsEmpty() {
+		line := d.pkgs[pkg]
+		if d.opts.HideEmptyPackages && line.empty {
 			continue
 		}
 
-		line := d.pkgs[pkg]
-		pkgname := RelativePackagePath(pkg) + " "
-		prefix := fmtDotElapsed(exec.Package(pkg))
-		line.checkWidth(len(prefix+pkgname), d.termWidth)
-		fmt.Fprintf(d.writer, prefix+pkgname+line.builder.String()+"\n")
+		packageLines = append(packageLines, line)
 	}
-	PrintSummary(d.writer, exec, SummarizeNone)
+	maxTestLines := d.termHeight - len(summaryLines)
+	lines := filterLines(packageLines, maxTestLines)
+	lines = append(lines, summaryLines...)
+	res := strings.Join(lines, "\n")
+	if res == d.last {
+		return nil
+	}
+	d.last = res
+
+	// Write empty lines for some padding
+	fmt.Fprint(d.writer, "\n")
+	d.writer.Write([]byte(res))
+
 	return d.writer.Flush()
 }
 
-// orderByLastUpdated so that the most recently updated packages move to the
-// bottom of the list, leaving completed package in the same order at the top.
-func (d *dotFormatter) orderByLastUpdated(i, j int) bool {
-	return d.pkgs[d.order[i]].lastUpdate.Before(d.pkgs[d.order[j]].lastUpdate)
+// filterLines picks which lines to show.
+// In general, we want to show as many lines as possible, but we have some height constraints.
+// If we have more lines than we can display, we need to be pickier.
+// We will take the last lines, but prioritize in progress packages.
+func filterLines(lines []*dotLine, budget int) []string {
+	res := []string{}
+	inProgress := 0
+	for _, l := range lines {
+		if !l.result.IsTerminal() {
+			inProgress++
+		}
+	}
+	terminalToDisplay := budget - inProgress
+	for i := len(lines) - 1; i >= 0 && budget > 0; i-- {
+		l := lines[i]
+		if l.result.IsTerminal() {
+			if terminalToDisplay <= 0 {
+				continue
+			}
+			terminalToDisplay--
+		}
+		budget--
+		res = append(res, l.out)
+	}
+	slices.Reverse(res)
+	return res
 }
 
 func fmtDotElapsed(p *Package) string {
 	f := func(v string) string {
-		return fmt.Sprintf(" %5s ", v)
+		c := colorEvent(TestEvent{Action: p.Result()})
+		act := c("⏱️")
+		switch p.Result() {
+		case ActionPass:
+			act = c("✔️")
+		case ActionFail:
+			act = c("✖")
+		case ActionSkip:
+			act = c("↷")
+		}
+		return fmt.Sprintf(" %5s %v ", v, act)
 	}
 
 	elapsed := p.Elapsed()
@@ -148,7 +218,7 @@ func fmtDotElapsed(p *Package) string {
 	}
 
 	const maxWidth = 7
-	var steps = []time.Duration{
+	steps := []time.Duration{
 		time.Millisecond,
 		10 * time.Millisecond,
 		100 * time.Millisecond,
