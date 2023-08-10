@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/hpcloud/tail"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -39,6 +41,34 @@ func (a Action) IsTerminal() bool {
 	default:
 		return false
 	}
+}
+
+type ActionGraph struct {
+	ID         int
+	Mode       string
+	Package    string
+	Deps       []int     `json:",omitempty"`
+	IgnoreFail bool      `json:",omitempty"`
+	Args       []string  `json:",omitempty"`
+	Link       bool      `json:",omitempty"`
+	Objdir     string    `json:",omitempty"`
+	Target     string    `json:",omitempty"`
+	Priority   int       `json:",omitempty"`
+	Failed     bool      `json:",omitempty"`
+	Built      string    `json:",omitempty"`
+	VetxOnly   bool      `json:",omitempty"`
+	NeedVet    bool      `json:",omitempty"`
+	NeedBuild  bool      `json:",omitempty"`
+	ActionID   string    `json:",omitempty"`
+	BuildID    string    `json:",omitempty"`
+	TimeReady  time.Time `json:",omitempty"`
+	TimeStart  time.Time `json:",omitempty"`
+	TimeDone   time.Time `json:",omitempty"`
+
+	Cmd     []string      // `json:",omitempty"`
+	CmdReal time.Duration `json:",omitempty"`
+	CmdUser time.Duration `json:",omitempty"`
+	CmdSys  time.Duration `json:",omitempty"`
 }
 
 // TestEvent is a structure output by go tool test2json and go test -json.
@@ -691,6 +721,11 @@ type EventHandler interface {
 	// Err is called for every line from the Stderr reader and may return an
 	// error to stop scanning.
 	Err(text string) error
+	//TraceEvent(event *TraceEvent, execution *Execution) interface{}
+}
+
+type TraceEventHandler interface {
+	TraceEvent(event TraceEvent, execution *Execution) error
 }
 
 // ScanTestOutput reads lines from config.Stdout and config.Stderr, populates an
@@ -717,9 +752,18 @@ func ScanTestOutput(config ScanConfig) (*Execution, error) {
 	execution.done = false
 	execution.lastRunID = config.RunID
 
+	trace, terr := os.Open("/tmp/trace")
+	if terr != nil {
+		return nil, terr
+	}
+	_ = trace
+
 	var group errgroup.Group
 	group.Go(func() error {
 		return stopOnError(config.Stop, readStdout(config, execution))
+	})
+	group.Go(func() error {
+		return stopOnError(config.Stop, readTrace(config, trace, execution))
 	})
 	group.Go(func() error {
 		return stopOnError(config.Stop, readStderr(config, execution))
@@ -769,6 +813,57 @@ func readStdout(config ScanConfig, execution *Execution) error {
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("failed to scan test output: %w", err)
+	}
+	return nil
+}
+
+func readTrace(config ScanConfig, trace *os.File, execution *Execution) error {
+	scanner := bufio.NewScanner(trace)
+	t, err := tail.TailFile("/tmp/trace", tail.Config{
+		Follow: true,
+	})
+	if err != nil {
+		return err
+	}
+	for rl := range t.Lines {
+		line := rl.Text
+
+		//for scanner.Scan() {
+		//	line := scanner.Text()
+		event := &TraceEvent{}
+		var err error
+		if strings.HasPrefix(line, "{") {
+			err = json.Unmarshal([]byte(line), event)
+		} else if strings.HasPrefix(line, ",{") {
+			err = json.Unmarshal([]byte(line[1:]), event)
+		} else {
+			fmt.Printf("skipping %v", line)
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if th, ok := config.Handler.(TraceEventHandler); ok {
+			if err := th.TraceEvent(*event, execution); err != nil {
+				return err
+			}
+		}
+		//fmt.Printf("Got event %v\n", event.Name)
+		//if err := config.Handler.Err(line); err != nil {
+		//	return fmt.Errorf("failed to handle stderr: %v", err)
+		//}
+		//if isGoModuleOutput(line) || isGoDebugOutput(line) {
+		//	continue
+		//}
+		//if strings.HasPrefix(line, "warning:") {
+		//	continue
+		//}
+		//execution.addError(line)
+	}
+
+	panic("scanner done")
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("failed to scan stderr: %v", err)
 	}
 	return nil
 }
@@ -849,4 +944,21 @@ func (s noopHandler) Event(TestEvent, *Execution) error {
 
 func (s noopHandler) Err(string) error {
 	return nil
+}
+
+type TraceEvent struct {
+	Name      string      `json:"name,omitempty"`
+	Phase     string      `json:"ph"`
+	Scope     string      `json:"s,omitempty"`
+	Time      float64     `json:"ts"`
+	Dur       float64     `json:"dur,omitempty"`
+	PID       uint64      `json:"pid"`
+	TID       uint64      `json:"tid"`
+	ID        uint64      `json:"id,omitempty"`
+	BindPoint string      `json:"bp,omitempty"`
+	Stack     int         `json:"sf,omitempty"`
+	EndStack  int         `json:"esf,omitempty"`
+	Arg       interface{} `json:"args,omitempty"`
+	Cname     string      `json:"cname,omitempty"`
+	Category  string      `json:"cat,omitempty"`
 }

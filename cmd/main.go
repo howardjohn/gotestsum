@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/dnephin/pflag"
 	"github.com/fatih/color"
@@ -251,6 +253,29 @@ func run(opts *options) error {
 		return err
 	}
 
+	fmt.Printf("reading actiongraph...\n")
+	var ag *os.File
+	for {
+		a, err := os.Open("/tmp/actiongraph")
+		if err == nil {
+			ag = a
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	fmt.Printf("action graph ready!\n")
+	by, err := io.ReadAll(ag)
+	if err != nil {
+		panic(err.Error())
+	}
+	agj := []*testjson.ActionGraph{}
+	if err := json.Unmarshal(by, &agj); err != nil {
+		panic(err.Error())
+	}
+
+	opts.formatOptions.ActionGraph = agj
+
+	//fmt.Printf("Got ag %v %v", string(by[:50]), err)
 	handler, err := newEventHandler(opts)
 	if err != nil {
 		return err
@@ -346,6 +371,11 @@ func goTestCmdArgs(opts *options, rerunOpts rerunOpts) []string {
 	result = append(result, args[:pkgArgIndex]...)
 	result = append(result, cmdArgPackageList(opts, rerunOpts)...)
 	result = append(result, args[pkgArgIndex:]...)
+	//result = append(result, "-debug-trace=/dev/fd/3")
+	result = append(result, "-debug-actiongraph=/tmp/actiongraph")
+	result = append(result, "-debug-trace=/tmp/trace")
+	//result = append(result, "-debug-actiongraph", "/dev/fd/3")
+	//result = append(result, "-debug-trace=/dev/fd/4")
 	return result
 }
 
@@ -397,9 +427,11 @@ func findPkgArgPosition(args []string) int {
 }
 
 type proc struct {
-	cmd    waiter
-	stdout io.Reader
-	stderr io.Reader
+	cmd         waiter
+	stdout      io.Reader
+	stderr      io.Reader
+	actionGraph io.Reader
+	traces      io.Reader
 	// signal is atomically set to the signal value when a signal is received
 	// by newSignalHandler.
 	signal int32
@@ -414,21 +446,45 @@ func startGoTest(ctx context.Context, dir string, args []string) (*proc, error) 
 		return nil, errors.New("missing command to run")
 	}
 
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	//cmd := exec.CommandContext(ctx, "/home/howardjohn/sdk/go1.21.0/bin/go", args[1:]...)
+	cmd := exec.CommandContext(ctx, "/home/howardjohn/git/go/bin/go", args[1:]...)
 	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
+	//cmd.Stdout = os.Stdout
 	cmd.Dir = dir
 
 	p := proc{cmd: cmd}
-	log.Debugf("exec: %s", cmd.Args)
+	log.Warnf("exec: %s", cmd.Args)
 	var err error
 	p.stdout, err = cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
 	}
-	p.stderr, err = cmd.StderrPipe()
+	//p.stderr, err = cmd.StderrPipe()
+	//if err != nil {
+	//	return nil, err
+	//}
+
+	os.Remove("/tmp/actiongraph")
+	os.Remove("/tmp/trace")
+	//tf, err := os.Create("/tmp/actiongraph")
+	//p.actionGraph = tf
+	//fmt.Printf("ag %v\n", tf.Name())
+	//tf, err := os.CreateTemp("/tmp", "actiongraph")
+	agReader, agWriter, err := os.Pipe()
+	_ = agWriter
 	if err != nil {
 		return nil, err
 	}
+	p.actionGraph = agReader
+	traceReader, traceWriter, err := os.Pipe()
+	_ = traceWriter
+	if err != nil {
+		return nil, err
+	}
+	p.traces = traceReader
+	//cmd.ExtraFiles = []*os.File{agWriter, traceWriter}
+
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to run %s: %w", strings.Join(cmd.Args, " "), err)
 	}

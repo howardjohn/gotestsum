@@ -23,7 +23,7 @@ func TestScanTestOutput_WithDotsFormatter(t *testing.T) {
 	out := new(bytes.Buffer)
 	dotfmt := &dotFormatter{
 		pkgs:      make(map[string]*dotLine),
-		writer:    dotwriter.New(out),
+		writer:    dotwriter.New(out, 100),
 		termWidth: 80,
 	}
 	shim := newFakeHandler(dotfmt, "input/go-test-json")
