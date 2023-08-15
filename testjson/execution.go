@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -39,6 +40,34 @@ func (a Action) IsTerminal() bool {
 	default:
 		return false
 	}
+}
+
+type ActionGraph struct {
+	ID         int
+	Mode       string
+	Package    string
+	Deps       []int     `json:",omitempty"`
+	IgnoreFail bool      `json:",omitempty"`
+	Args       []string  `json:",omitempty"`
+	Link       bool      `json:",omitempty"`
+	Objdir     string    `json:",omitempty"`
+	Target     string    `json:",omitempty"`
+	Priority   int       `json:",omitempty"`
+	Failed     bool      `json:",omitempty"`
+	Built      string    `json:",omitempty"`
+	VetxOnly   bool      `json:",omitempty"`
+	NeedVet    bool      `json:",omitempty"`
+	NeedBuild  bool      `json:",omitempty"`
+	ActionID   string    `json:",omitempty"`
+	BuildID    string    `json:",omitempty"`
+	TimeReady  time.Time `json:",omitempty"`
+	TimeStart  time.Time `json:",omitempty"`
+	TimeDone   time.Time `json:",omitempty"`
+
+	Cmd     []string      // `json:",omitempty"`
+	CmdReal time.Duration `json:",omitempty"`
+	CmdUser time.Duration `json:",omitempty"`
+	CmdSys  time.Duration `json:",omitempty"`
 }
 
 // TestEvent is a structure output by go tool test2json and go test -json.
@@ -691,6 +720,11 @@ type EventHandler interface {
 	// Err is called for every line from the Stderr reader and may return an
 	// error to stop scanning.
 	Err(text string) error
+	//TraceEvent(event *TraceEvent, execution *Execution) interface{}
+}
+
+type TraceEventHandler interface {
+	TraceEvent(event TraceEvent, execution *Execution) error
 }
 
 // ScanTestOutput reads lines from config.Stdout and config.Stderr, populates an
@@ -717,9 +751,17 @@ func ScanTestOutput(config ScanConfig) (*Execution, error) {
 	execution.done = false
 	execution.lastRunID = config.RunID
 
+	trace, terr := os.Open("/tmp/trace")
+	if terr != nil {
+		return nil, terr
+	}
+
 	var group errgroup.Group
 	group.Go(func() error {
 		return stopOnError(config.Stop, readStdout(config, execution))
+	})
+	group.Go(func() error {
+		return stopOnError(config.Stop, readTrace(config, trace, execution))
 	})
 	group.Go(func() error {
 		return stopOnError(config.Stop, readStderr(config, execution))
@@ -771,6 +813,49 @@ func readStdout(config ScanConfig, execution *Execution) error {
 		return fmt.Errorf("failed to scan test output: %w", err)
 	}
 	return nil
+}
+
+func readTrace(config ScanConfig, trace *os.File, execution *Execution) error {
+	defer trace.Close()
+	th, ok := config.Handler.(TraceEventHandler)
+	if !ok {
+		return nil
+	}
+	r := bufio.NewReader(trace)
+	for {
+		line, err := r.ReadBytes('\n')
+		if bytes.Equal(line, []byte{']'}) {
+			return nil
+		}
+		if err != nil {
+			if err == io.EOF {
+				time.Sleep(time.Millisecond * 100)
+				continue
+			}
+			return err
+		}
+
+		var event TraceEvent
+
+		if bytes.HasPrefix(line, []byte(",{")) {
+			line = line[1:]
+		}
+		if !bytes.HasPrefix(line, []byte("{")) {
+			continue
+		}
+		if !bytes.Contains(line, []byte("Executing")) {
+			continue
+		}
+		if bytes.Contains(line, []byte("-\\u003e")) {
+			continue
+		}
+		if err := json.Unmarshal(line, &event); err != nil {
+			return err
+		}
+		if err := th.TraceEvent(event, execution); err != nil {
+			return err
+		}
+	}
 }
 
 func readStderr(config ScanConfig, execution *Execution) error {
@@ -849,4 +934,21 @@ func (s noopHandler) Event(TestEvent, *Execution) error {
 
 func (s noopHandler) Err(string) error {
 	return nil
+}
+
+type TraceEvent struct {
+	Name      string      `json:"name,omitempty"`
+	Phase     string      `json:"ph"`
+	Scope     string      `json:"s,omitempty"`
+	Time      float64     `json:"ts"`
+	Dur       float64     `json:"dur,omitempty"`
+	PID       uint64      `json:"pid"`
+	TID       uint64      `json:"tid"`
+	ID        uint64      `json:"id,omitempty"`
+	BindPoint string      `json:"bp,omitempty"`
+	Stack     int         `json:"sf,omitempty"`
+	EndStack  int         `json:"esf,omitempty"`
+	Arg       interface{} `json:"args,omitempty"`
+	Cname     string      `json:"cname,omitempty"`
+	Category  string      `json:"cat,omitempty"`
 }

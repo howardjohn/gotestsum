@@ -35,6 +35,13 @@ func (h *eventHandler) Err(text string) error {
 	return nil
 }
 
+func (h *eventHandler) TraceEvent(event testjson.TraceEvent, execution *testjson.Execution) error {
+	if f, ok := h.formatter.(testjson.TraceEventFormatter); ok {
+		return f.FormatTrace(event, execution)
+	}
+	return nil
+}
+
 func (h *eventHandler) Event(event testjson.TestEvent, execution *testjson.Execution) error {
 	if err := writeWithNewline(h.jsonFile, event.Bytes()); err != nil {
 		return fmt.Errorf("failed to write JSON file: %w", err)

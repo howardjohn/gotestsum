@@ -277,6 +277,9 @@ func colorEvent(event TestEvent) func(format string, a ...interface{}) string {
 type EventFormatter interface {
 	Format(event TestEvent, output *Execution) error
 }
+type TraceEventFormatter interface {
+	FormatTrace(event TraceEvent, exec *Execution) error
+}
 
 type eventFormatterFunc func(event TestEvent, output *Execution) error
 
@@ -287,6 +290,7 @@ func (e eventFormatterFunc) Format(event TestEvent, output *Execution) error {
 type FormatOptions struct {
 	HideEmptyPackages    bool
 	UseHiVisibilityIcons bool
+	ActionGraph          []*ActionGraph
 }
 
 // NewEventFormatter returns a formatter for printing events.
@@ -306,6 +310,8 @@ func NewEventFormatter(out io.Writer, format string, formatOpts FormatOptions) E
 		return dotsFormatV1(out)
 	case "dots-v2":
 		return newDotFormatter(out, formatOpts)
+	case "dots-v3":
+		return newDotv3Formatter(out, formatOpts)
 	case "testname", "short-verbose":
 		return testNameFormat(out)
 	case "pkgname", "short":

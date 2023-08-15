@@ -2,3 +2,4 @@ vendor/
 dist/
 junit.xml
 .plsdo/
+gotestsum
