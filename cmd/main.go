@@ -253,7 +253,6 @@ func run(opts *options) error {
 		return err
 	}
 
-	fmt.Printf("reading actiongraph...\n")
 	var ag *os.File
 	for {
 		a, err := os.Open("/tmp/actiongraph")
@@ -261,9 +260,8 @@ func run(opts *options) error {
 			ag = a
 			break
 		}
-		time.Sleep(time.Second)
+		time.Sleep(time.Millisecond * 100)
 	}
-	fmt.Printf("action graph ready!\n")
 	by, err := io.ReadAll(ag)
 	if err != nil {
 		panic(err.Error())
@@ -465,7 +463,6 @@ func startGoTest(ctx context.Context, dir string, args []string) (*proc, error) 
 	//cmd.Env = append(cmd.Env, "GOMODCACHE=/home/howardjohn/go/pkg/mod")
 
 	p := proc{cmd: cmd}
-	log.Warnf("exec: %s", cmd.Args)
 	var err error
 	p.stdout, err = cmd.StdoutPipe()
 	if err != nil {
