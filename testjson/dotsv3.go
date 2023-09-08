@@ -198,7 +198,7 @@ func (d *dotv3Formatter) Format(event TestEvent, exec *Execution) error {
 	*/
 }
 func (d *dotv3Formatter) runWriter() {
-	t := time.NewTicker(time.Millisecond * 156)
+	t := time.NewTicker(time.Millisecond * 50)
 	for {
 		select {
 		case <-d.stop:
@@ -293,7 +293,7 @@ func (d *dotv3Formatter) workerSummary() string {
 	}
 	sort.Strings(pkgs)
 	sort.Strings(workers)
-	return "Workers: " + strings.Join(workers, "")
+	//return "Workers: " + strings.Join(workers, "")
 	return fmt.Sprintf(" Workers: %d linking, %d building, %d running, %d vetting, %d waiting, %d unknown",
 		linking, building, running, vetting, nothing, unknown)
 }

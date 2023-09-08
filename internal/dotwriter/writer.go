@@ -7,7 +7,9 @@ package dotwriter
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
+	"os"
 	"time"
 )
 
@@ -31,17 +33,64 @@ func New(out io.Writer) *Writer {
 	return w
 }
 
+var i = 0
+var iter = 0
+
 // Flush the buffer, writing all buffered lines to out
 func (w *Writer) Flush() error {
 	if w.buf.Len() == 0 {
 		return nil
 	}
-	w.hideCursor()
+	iter++
+
+	last := w.last
+
 	b := w.buf.Bytes()
-	w.clearLines(w.lineCount)
+	w.last = bytes.Clone(b)
+	os.WriteFile(fmt.Sprintf("/tmp/outs/old-%d.txt", iter), last, 0644)
+	os.WriteFile(fmt.Sprintf("/tmp/outs/new-%d.txt", iter), w.last, 0644)
+
+	oldLine := w.lineCount
 	w.lineCount = bytes.Count(b, []byte{'\n'})
-	_, err := w.out.Write(b)
+	w.hideCursor()
+	var err error
+	if oldLine != w.lineCount {
+		//	// Full reset
+		//	// TODO: we can do incremental here as well, we just need to be careful
+		w.clearLines(oldLine)
+		_, err = w.out.Write(b)
+	} else {
+		i++
+		// Incremental reset
+		w.up(w.lineCount)
+		old := bytes.Split(last, []byte{'\n'})
+		now := bytes.Split(w.last, []byte{'\n'})
+		for i := range now {
+			// Already verified these are match
+			var ol []byte
+			if len(old) > i {
+				ol = old[i]
+			}
+			nl := now[i]
+			if bytes.Equal(ol, nl) {
+				//w.out.Write([]byte(fmt.Sprint("skip ", i+1)))
+				w.down()
+			} else {
+				//w.out.Write([]byte(fmt.Sprint(i + 1)))
+				w.out.Write(nl)
+				//w.clearRest()
+				w.out.Write([]byte{'\n'})
+				//w.down()
+			}
+		}
+	}
+	// Now move to next line
+	//w.down()
+	//}
+	//}
+
 	w.showCursor()
+	//w.out.Write([]byte(fmt.Sprintf("[%d %d %d %d]", i, len(old), len(now), w.lineCount)))
 	w.buf.Reset()
 	w.out.(*bufio.Writer).Flush()
 	return err

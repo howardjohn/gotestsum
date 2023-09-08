@@ -11,6 +11,11 @@ import (
 )
 
 func main() {
+	//var startSeq = fmt.Sprintf("\x1BP=1s\x1B\x5c")
+	//var endSeq = `\eP=2s\e\x5c`
+	//os.Stdout.WriteString(startSeq)
+	//os.Stdout.WriteString("hello")
+	//return
 	err := route(os.Args)
 	switch {
 	case err == nil:
