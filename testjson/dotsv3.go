@@ -198,7 +198,7 @@ func (d *dotv3Formatter) Format(event TestEvent, exec *Execution) error {
 	*/
 }
 func (d *dotv3Formatter) runWriter() {
-	t := time.NewTicker(time.Millisecond * 50)
+	t := time.NewTicker(time.Millisecond * 16)
 	for {
 		select {
 		case <-d.stop:

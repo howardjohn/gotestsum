@@ -47,12 +47,46 @@ func (w *Writer) Flush() error {
 
 	b := w.buf.Bytes()
 	w.last = bytes.Clone(b)
+	acts := &bytes.Buffer{}
 	os.WriteFile(fmt.Sprintf("/tmp/outs/old-%d.txt", iter), last, 0644)
 	os.WriteFile(fmt.Sprintf("/tmp/outs/new-%d.txt", iter), w.last, 0644)
 
 	oldLine := w.lineCount
 	w.lineCount = bytes.Count(b, []byte{'\n'})
 	w.hideCursor()
+	w.up(oldLine)
+
+	writes := 0
+	lines := bytes.Split(b, []byte{'\n'})
+	acts.WriteString(fmt.Sprintf("Raw: [%v]", string(b)))
+	for i, line := range lines {
+		w.out.Write(line)
+		writes++
+		w.clearRest()
+		if i != len(lines)-1 {
+			//w.out.Write([]byte(fmt.Sprint(iter)))
+			w.out.Write([]byte{'\n'})
+			acts.WriteString(fmt.Sprintf("write with newline: up=%d l=%d [%v]\n", oldLine, len(b), string(line)))
+		} else {
+			acts.WriteString(fmt.Sprintf("write w/o newline: up=%d l=%d [%v]\n", oldLine, len(b), string(line)))
+
+		}
+	}
+	//w.down()
+	//w.down()
+	//w.down()
+	//w.down()
+	w.showCursor()
+	//w.out.Write([]byte(fmt.Sprintf("[%d %d %d %d]", i, len(old), len(now), w.lineCount)))
+	os.WriteFile(fmt.Sprintf("/tmp/outs/acts-%d.txt", iter), acts.Bytes(), 0644)
+	w.buf.Reset()
+	//w.out.Write([]byte(fmt.Sprintf(
+	//	"[%d %d %d]", len(b), oldLine, writes,
+	//)))
+	//w.out.Write(b)
+	w.out.(*bufio.Writer).Flush()
+	//time.Sleep(time.Second * 1)
+	return nil
 	var err error
 	if oldLine != w.lineCount {
 		//	// Full reset

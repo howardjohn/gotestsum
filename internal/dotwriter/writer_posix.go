@@ -19,6 +19,9 @@ func (w *Writer) clearLines(count int) {
 	_, _ = fmt.Fprint(w.out, strings.Repeat(clear, count))
 }
 func (w *Writer) up(count int) {
+	if count == 0 {
+		return
+	}
 	_, _ = fmt.Fprint(w.out, fmt.Sprintf("%c[%dA", ESC, count))
 }
 func (w *Writer) down() {
