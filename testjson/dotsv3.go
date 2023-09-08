@@ -3,6 +3,7 @@ package testjson
 import (
 	"bytes"
 	"fmt"
+	"github.com/fatih/color"
 	"golang.org/x/term"
 	"gotest.tools/gotestsum/internal/dotwriter"
 	"gotest.tools/gotestsum/internal/log"
@@ -198,7 +199,8 @@ func (d *dotv3Formatter) Format(event TestEvent, exec *Execution) error {
 	*/
 }
 func (d *dotv3Formatter) runWriter() {
-	t := time.NewTicker(time.Millisecond * 156)
+	//30fps
+	t := time.NewTicker(time.Millisecond * 33)
 	for {
 		select {
 		case <-d.stop:
@@ -275,16 +277,16 @@ func (d *dotv3Formatter) workerSummary() string {
 		switch types {
 		case "link":
 			linking++
-			workers = append(workers, "🔗")
+			workers = append(workers, color.MagentaString("█"))
 		case "build":
 			building++
-			workers = append(workers, "🔨 ")
+			workers = append(workers, color.BlueString("█"))
 		case "test run":
 			running++
 			pkgs = append(pkgs, pn[len(pn)-1])
-			workers = append(workers, "⏱️ ")
+			workers = append(workers, color.GreenString("█"))
 		case "vet":
-			workers = append(workers, "🔍")
+			workers = append(workers, color.HiGreenString("█"))
 			vetting++
 		default:
 			workers = append(workers, "")

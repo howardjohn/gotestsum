@@ -17,6 +17,17 @@ func (w *Writer) clearLines(count int) {
 	_, _ = fmt.Fprint(w.out, strings.Repeat(clear, count))
 }
 
+func (w *Writer) up(count int) {
+	if count == 0 {
+		return
+	}
+	_, _ = fmt.Fprint(w.out, fmt.Sprintf("%c[%dA", ESC, count))
+}
+
+func (w *Writer) clearRest() {
+	_, _ = fmt.Fprint(w.out, fmt.Sprintf("%c[0K", ESC))
+}
+
 // hideCursor hides the cursor and returns a function to restore the cursor back.
 func (w *Writer) hideCursor() {
 	_, _ = fmt.Fprint(w.out, hide)

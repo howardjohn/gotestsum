@@ -37,14 +37,23 @@ func (w *Writer) Flush() error {
 		return nil
 	}
 	w.hideCursor()
-	b := w.buf.Bytes()
-	w.clearLines(w.lineCount)
-	w.lineCount = bytes.Count(b, []byte{'\n'})
-	_, err := w.out.Write(b)
+	w.up(w.lineCount)
+
+	lines := bytes.Split(w.buf.Bytes(), []byte{'\n'})
+	w.lineCount = len(lines) - 1
+	for i, line := range lines {
+		w.out.Write(line)
+		w.clearRest()
+		if i != len(lines)-1 {
+			w.out.Write([]byte{'\n'})
+		} else {
+
+		}
+	}
 	w.showCursor()
 	w.buf.Reset()
 	w.out.(*bufio.Writer).Flush()
-	return err
+	return nil
 }
 
 // Write saves buf to a buffer
