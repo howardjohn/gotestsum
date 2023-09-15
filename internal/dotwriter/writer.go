@@ -16,11 +16,12 @@ type Writer struct {
 	out       io.Writer
 	buf       bytes.Buffer
 	lineCount int
+	h         int
 }
 
 // New returns a new Writer
-func New(out io.Writer) *Writer {
-	return &Writer{out: out}
+func New(out io.Writer, h int) *Writer {
+	return &Writer{out: out, h: h - 2}
 }
 
 // Write saves buf to a buffer

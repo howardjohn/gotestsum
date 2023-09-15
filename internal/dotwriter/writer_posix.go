@@ -25,11 +25,12 @@ func (w *Writer) Flush() error {
 	// Hide cursor during write to avoid it moving around the screen
 	defer w.hideCursor()()
 
-	// Move up to the top of our last output.
-	w.up(w.lineCount)
+	w.up(min(w.lineCount, w.h))
 	lines := bytes.Split(w.buf.Bytes(), []byte{'\n'})
 	w.lineCount = len(lines) - 1 // Record how many lines we will write for the next Flush()
-	for i, line := range lines {
+	// Move up to the top of our last output.
+	start := len(lines) - min(w.lineCount, w.h)
+	for i, line := range lines[start:] {
 		// For each line, write the contents and clear everything else on the line
 		_, err := w.out.Write(line)
 		if err != nil {

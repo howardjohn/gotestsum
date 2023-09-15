@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -76,14 +75,14 @@ func (l *dotLine) checkWidth(prefix, terminal int) {
 }
 
 func newDotFormatter(out io.Writer, opts FormatOptions) EventFormatter {
-	w, _, err := term.GetSize(int(os.Stdout.Fd()))
+	w, h, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil || w == 0 {
 		log.Warnf("Failed to detect terminal width for dots format, error: %v", err)
 		return dotsFormatV1(out)
 	}
 	return &dotFormatter{
 		pkgs:      make(map[string]*dotLine),
-		writer:    dotwriter.New(out),
+		writer:    dotwriter.New(out, h),
 		termWidth: w,
 		opts:      opts,
 	}
@@ -108,7 +107,7 @@ func (d *dotFormatter) Format(event TestEvent, exec *Execution) error {
 	// Add an empty header to work around incorrect line counting
 	fmt.Fprint(d.writer, "\n\n")
 
-	sort.Slice(d.order, d.orderByLastUpdated)
+	//sort.Slice(d.order, d.orderByLastUpdated)
 	for _, pkg := range d.order {
 		if d.opts.HideEmptyPackages && exec.Package(pkg).IsEmpty() {
 			continue
